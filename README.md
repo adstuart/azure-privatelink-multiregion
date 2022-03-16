@@ -1,10 +1,9 @@
-# Planning for multi-region High Availability and Disaster Recovery with Azure Private Link 2-
--
-
+# Planning for multi-region High Availability and Disaster Recovery with Azure Private Link 
 
 ## Introduction
 
-When working with Azure Private Link we are required to modify default DNS forwarding to make use of the Private Endpoints to access PaaS Services (And Azure Private Link Services) in a secure way. Specifically, by default, lookups to public FQDNs used by Microsoft PaaS Services (E.g. .database.windows.net for Azure SQL) will return a public IP address. We have to modify the configuration of DNS to return a Private IP address which maps to the NIC used by a Private Endpoint. 
+When working with Azure Private Link we are required to modify default DNS forwarding to make use of the Private Endpoints to access PaaS Services (And Azure Private Link Services) in a secure way. Specifically, by default, lookups to public FQDNs used by Microsoft PaaS Services (E.g. .database.windows.net for Azure SQL) will return a public IP address. We have to modify the configuration of DNS to return a Private IP address which maps to the NIC used by a Private Endpoint. -
+
 
 **This article aims to explain how this requirement interacts with  designs that utilise multiple Azure Regions**, and therefore explores scenarios mapping to Disaster Recovery and High Availability requirements. We propose some possible topologies for DNS integration, and explain the interactions with some example PaaS services.
 
