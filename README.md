@@ -19,7 +19,7 @@ Multi-region use of Azure Private Link
 - [5. Conclusion](#5-conclusion)
     - [5.1. Azure DNS Private Zones are a global resource](#51-azure-dns-private-zones-are-a-global-resource)
     - [5.2. Hybrid / On-Premises conditional forwarding](#52-hybrid--on-premises-conditional-forwarding)
-- [6. Thanks](#6-thanks)
+- [6. Contributors](#6-contributors)
 
 <!-- /TOC -->
 
@@ -150,8 +150,8 @@ The benefits highlighted by "regional split brain" use of Azure Private DNS Zone
 
 Whichever architecture option you choose to deploy, this does not change the story when it comes to [conditionally forward from On-Premises](https://docs.microsoft.com/en-us/azure/private-link/private-endpoint-dns#on-premises-workloads-using-a-dns-forwarder) based DNS servers towards Azure VNet based DNS servers. For both options you will still require DNS forwarders hosted in all regions, which in turn will forward to Azure DNS Private Zones based on their configured VNet [links](https://docs.microsoft.com/en-us/azure/dns/private-dns-virtual-network-links).
 
-# 6. Thanks
+# 6. Contributors
 
 Many internal Microsoft FTE were consulted during not only the creation of this document, but the simple observation that a discussion on this topic was needed. In fact, there was probably over 30 such conversations, and any effort to name everyone, would no doubt miss someones valuable input. Therefore I would like to thank all colleagues in GBB, CSU, CAE, FastTrack and the Product Groups for their support with this work.
--
+
 
