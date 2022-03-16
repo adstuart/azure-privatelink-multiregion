@@ -1,4 +1,4 @@
-# Planning for multi-region High Availability and Disaster Recovery with Azure Private Link
+# Planning for multi-region High Availability and Disaster Recovery with Azure Private Link 2
 
 ## Introduction
 
