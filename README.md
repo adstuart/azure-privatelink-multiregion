@@ -16,10 +16,10 @@ Multi-region use of Azure Private Link
     - [2.2. Design considerations](#22-design-considerations)
         - [2.2.1. Sub-Optimal use of Azure Private Link / SDN](#221-sub-optimal-use-of-azure-private-link--sdn)
         - [2.2.2. Manual DNS intervention required for inter-region failover of some Azure PaaS services when using Private Link](#222-manual-dns-intervention-required-for-inter-region-failover-of-some-azure-paas-services-when-using-private-link)
-- [2. Conclusion](#2-conclusion)
-    - [Azure DNS Private Zones are a global resource](#azure-dns-private-zones-are-a-global-resource)
-    - [Hybrid / On-Premises conditional forwarding](#hybrid--on-premises-conditional-forwarding)
-- [3. Thanks](#3-thanks)
+- [3. Conclusion](#3-conclusion)
+    - [3.1. Azure DNS Private Zones are a global resource](#31-azure-dns-private-zones-are-a-global-resource)
+    - [3.2. Hybrid / On-Premises conditional forwarding](#32-hybrid--on-premises-conditional-forwarding)
+- [4. Thanks](#4-thanks)
 
 <!-- /TOC -->
 
@@ -132,7 +132,7 @@ The use of a common global Azure DNS Private Zone presents a challenge when work
 |:--:| 
 | <span style="font-size:0.8em;">Figure 7 - Azure Storage failover PaaS access with global Azure DNS Private Zone</span> |
 
-# 2. Conclusion
+# 3. Conclusion
 
 This document highlights that there is a key design decision to be made at the intersection of DNS design and use of the Azure Private Link technology; do I use a single global Azure Private DNS Zone, or do I use one per region?
 
@@ -142,15 +142,15 @@ The conclusion is that, whilst both designs are viable and functional, the use o
 - This seamless failover and optimal network transport usage, when using Private Link, is reflective of the same behaviour you would achieve by default when using PaaS services without Private Link. (Accessing them over their publicly available interfaces)
 -	Efficient use of the Azure SDN upon which Azure Private Link as a technology is built. By keeping the access to Private Link (I.e. the Private Endpoint) as close to the client as possible, we reduce cost and latency, whilst offering the most robust and reliable network path
 
-## Azure DNS Private Zones are a global resource
+## 3.1. Azure DNS Private Zones are a global resource
 
 The benefits highlighted by "regional split brain" use of Azure Private DNS Zones for Azure Private link, are **not** a recommendation to abandon/forget the Global nature  Azure DNS Private Zones as an Azure resource in their entirety. In fact, for your own services (where you are using Azure DNS Private Zones for an internal forward lookup zone) the right approach _is_ normally to use a global zone. This is because, normally, the IP address (A record) returned by DNS, represents the destination of the service you are trying to access. The reason this fundamentally differs for Azure Private Link, is  that the IP address (A record) returned by DNS represents only the location of the Private Endpoint (PE), _not_ the destination/location of the finale PaaS service to be accessed.
 
-## Hybrid / On-Premises conditional forwarding
+## 3.2. Hybrid / On-Premises conditional forwarding
 
 Whichever architecture option you choose to deploy, this does not change the story when it comes to [conditionally forward from On-Premises](https://docs.microsoft.com/en-us/azure/private-link/private-endpoint-dns#on-premises-workloads-using-a-dns-forwarder) based DNS servers towards Azure VNet based DNS servers. For both options you will still require DNS forwarders hosted in all regions, which in turn will forward to Azure DNS Private Zones based on their configured VNet [links](https://docs.microsoft.com/en-us/azure/dns/private-dns-virtual-network-links).
 
-# 3. Thanks
+# 4. Thanks
 
 Many internal Microsoft FTE were consulted during not only the creation of this document, but the simple observation that a discussion on this topic was needed. In fact, there was probably over 30 such conversations, and any effort to name everyone, would no doubt miss someones valuable input. Therefore I would like to thank all colleagues in GBB, CSU, CAE, FastTrack and the Product Groups for their support with this work.
 
