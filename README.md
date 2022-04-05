@@ -29,8 +29,7 @@ This article assumes familiarity with the concepts of Azure Private Link, DNS an
 
 - https://aka.ms/whatisprivatelink - Introductory video on Private Link
 - https://aka.ms/whyprivatelink - High level white paper exploring the requirement for Private Link
-- https://-
-aka.ms/privatelinkdns - Technical white paper introducing the DNS challenge when working with Private Link
+- https://aka.ms/privatelinkdns - Technical white paper introducing the DNS challenge when working with Private Link
 - Microsoft official documentation on Private Link DNS integration, https://docs.microsoft.com/en-us/azure/private-link/private-endpoint-dns
 - Daniel Mauser's excellent collection of articles related to Private link, https://github.com/dmauser/PrivateLink
 
