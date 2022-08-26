@@ -214,7 +214,7 @@ For completeness, lets show why the single global zone means we do **not** have 
 
 ![](images/2022-08-26-12-45-27.png)
 
-With a single global Azure DNS Private Zone, even if A forwards to D (due to the RTT algorithm of some DNS software) **because we are using a single common Azure DNS Global Zone, which will only contain an A record within region A, even though the DNS request is sent to region B, then actual data-path and network connectivity to the Private Endpoint is still optimally sent to region A.**
+With a single global Azure DNS Private Zone, even if A forwards to D (due to the RTT algorithm of some DNS software) **because we are using a single common Azure DNS Global Zone, which will only contain an A record within region A, even though the DNS request is sent to region B, then actual datapath and network connectivity to the Private Endpoint is still optimally sent to region A.**
 
 # 7. Contributors
 
