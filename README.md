@@ -145,6 +145,8 @@ The use of a common global Azure DNS Private Zone presents a challenge when work
 |:--:| 
 | <span style="font-size:0.8em;">Figure 7 - Azure Storage failover PaaS access with global Azure DNS Private Zone</span> |
 
+> Information on Azure DNS Private Zones global failover https://learn.microsoft.com/en-us/azure/dns/private-dns-resiliency
+
 ### 4.2.3. Hybrid Private Link connectivity always optimal
 
 This approach, the use of a single global Azure DNS private zone, ultimately allows returns the same A record (across your global common Layer-3 routing domain) for the same FQDN, regardless of which region returns the query. This makes can result in sub-optimal "in Azure" use of Private Link / SDN as laid out in section 4.2.1. 
