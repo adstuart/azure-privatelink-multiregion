@@ -20,6 +20,7 @@ Multi-region use of Azure Private Link
         - [4.2.3. Hybrid Private Link connectivity always optimal](#423-hybrid-private-link-connectivity-always-optimal)
 - [5. Conclusion](#5-conclusion)
     - [5.1. Note! Azure DNS Private Zones are a global resource](#51-note-azure-dns-private-zones-are-a-global-resource)
+    - [5.2. Further reading](#52-further-reading)
 - [6. Appendix A - Hybrid forwarding and multi-region Private Link considerations when accessing from On-Premises](#6-appendix-a---hybrid-forwarding-and-multi-region-private-link-considerations-when-accessing-from-on-premises)
     - [6.1. Baseline topology and Windows/BIND differences](#61-baseline-topology-and-windowsbind-differences)
     - [6.2. Hybrid Private Link access with Architecture Option 1 – Azure DNS Private Zone per Azure Region](#62-hybrid-private-link-access-with-architecture-option-1--azure-dns-private-zone-per-azure-region)
@@ -41,11 +42,13 @@ This article assumes familiarity with the concepts of Azure Private Link, DNS an
 
 # 2. Introduction
 
-At the time of writing, Azure Private Link has been Generally Available (GA) for around two years (since February 2020), therefore adoption of the service is now widespread amongst Azure customers. Naturally, these same customers often use services across multiple Azure regions. 
+Azure Private Link is now widely adopted, and most non-trivial Azure estates span multiple regions.
 
 When using Azure Private Link, one of the major considerations is how to handle DNS resolution and forwarding[^1].
 
-This article discusses the topic of how best to design your use of **Azure DNS Private Zones** when working with **Azure Private Link** across two (or more) Azure regions, often with the intention of designing for Disaster Recovery or Business Continuity (BCDR) scenarios. Specifically, it addresses the question of _"Should I utilise one common Azure DNS Private Zone attached to all Azure regions, or should I use region-specific zones?"_
+This article discusses how best to design your use of **Azure DNS Private Zones** when working with **Azure Private Link** across two (or more) Azure regions, often with the intention of designing for Disaster Recovery or Business Continuity (BCDR) scenarios. Specifically, it addresses the question of _"Should I utilise one common Azure DNS Private Zone attached to all Azure regions, or should I use region-specific zones?"_
+
+> **Update note (2026):** This article was originally written in 2022 and presented the two zone models as a balanced trade-off pivoted on "Complexity vs RTO". Since then Microsoft's Cloud Adoption Framework, Azure Landing Zones reference implementations (Bicep + Terraform), the AVM pattern module [`avm/ptn/network/private-link-private-dns-zones`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/ptn/network/private-link-private-dns-zones), and the Azure Architecture Center have all converged on the **single global Private DNS zone per `privatelink.*` namespace, hosted centrally and linked to all VNets** as the default baseline. The two-option walkthrough below is preserved as a deep-dive on the trade-offs; the conclusion and comparison table have been updated to reflect what holds up in 2026 vs what was a fair argument in 2022. See [Further reading](#52-further-reading) for current sources.
 
 [^1]: When working with Azure Private Link we are required to modify default DNS forwarding to make use of the Private Endpoints to access PaaS Services (And Azure Private Link Services) over private network connectivity. Specifically, by default, lookups to public FQDNs used by Microsoft PaaS Services (E.g. x.database.windows.net for Azure SQL) will return a public IP address. We have to modify the configuration of DNS to return a Private IP address which maps to the NIC used by a Private Endpoint. 
 
@@ -161,20 +164,65 @@ However, when integrating [conditional forward from On-Premises](https://learn.m
 
 # 5. Conclusion
 
-This document highlights that there is a key design decision to be made at the intersection of DNS design and use of the Azure Private Link technology; do I use a single global Azure Private DNS Zone, or do I use one per region?
+Both designs are viable and functional, but they have different characteristics — and the balance has shifted since this article was first written.
 
-The conclusion is that, whilst both designs are viable and functional, they do have differing characteristics that can effect both day-to-day BAU performance as well as the expected behaviour and associated RTO during a DR event. Which design is correct for your organisation will depend on many factors including IaaC-maturity and Global Scale level. 
+**Recommended baseline (2026):** Use a single global Private DNS zone for each `privatelink.*` namespace, centrally managed in the connectivity subscription and linked to all VNets that need resolution, with a Private Endpoint per region for any service consumed regionally. This is the pattern codified by the AVM pattern module [`avm/ptn/network/private-link-private-dns-zones`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/ptn/network/private-link-private-dns-zones), used by ALZ-Bicep and ALZ Terraform, and called out in CAF and the Azure Architecture Center.
 
-However, the main decision pivot is Complexity vs RTO, for a lot of customers, the single zone model will be perfectly acceptable (They are willing to accept a DR run-book that takes hours to complete, if it only needs using during a catastrophic failure aka region-down), where-as other customers will want to do as much as possible to ensure the DR process is automated. The table below attempts to summarise the pros/cons of each approach.
+**Per-region or per-spoke zones remain appropriate when:**
 
-  | - | Optimal Private Link SDN traffic flows  | Seamless BCDR of all PaaS service connectivity during "region down" event |  Optimal Hybrid forwarding | Automation complexity |
-  | ------------- | ------------- |   ------------- | ------------ | ------------ |
-  | Architecture Option 1 – Azure DNS Private Zone per Azure Region  | Yes  |   Yes (low RTO)  | Maybe (see Appendix A)|   High |
-  | Architecture Option 2 – Single Global Azure DNS Private Zone (attached to all Azure Regions)  | No |   No (High RTO) | Yes | Low |
+- **Shared-FQDN geo-redundant PaaS** is in use (Azure Storage GRS/RA-GRS, SQL failover groups, Cosmos DB multi-region writes). The same FQDN must resolve to a different IP after failover; per-region zones avoid the active/standby A-record juggle. (See §4.2.2.)
+- **Strict tenant or sovereignty isolation** mandates segmentation by region or workload subscription. CAF actively discourages this with its `Deny-PrivateDNSZone-PrivateLink` policy by default — but the policy is a default, not a law.
+- **Cross-tenant Private Link** consumption, where the consumer cannot link to the producer's zone. Private DNS [`resolutionPolicy=NxDomainRedirect`](https://learn.microsoft.com/azure/dns/private-dns-fallback) may be the right tool here rather than zone duplication.
+- **BIND/Infoblox-based hybrid DNS environments** — see Appendix A. In some topologies the single global zone is materially simpler regardless of the points above.
+
+**Updated comparison:**
+
+  | Criterion | Option 1 — Per-region zones | Option 2 — Single global zone |
+  | --- | --- | --- |
+  | Optimal Private Link SDN traffic flows | Yes (with per-region PEs) | Yes with per-region PEs; sub-optimal only when a single PE in one region serves multi-region clients |
+  | Inter-region resilience of name resolution itself | Yes — independent regional zones | Yes — Private DNS zones are global resources whose data plane is regionally replicated ([resiliency doc](https://learn.microsoft.com/azure/dns/private-dns-resiliency)) |
+  | Seamless failover for shared-FQDN geo-redundant PaaS (storage GRS, SQL failover groups) | Yes (each region has its own A record) | Conditional — manual record update required |
+  | Optimal hybrid forwarding (BIND/Infoblox) | Maybe (see Appendix A) | Yes |
+  | Operational consistency / drift risk | Higher — N copies to keep aligned | Lower — single source of truth |
+  | Alignment with current CAF / ALZ / AVM guidance | Conditional (per-region scenarios above) | Default baseline |
+  | Automation complexity | Higher | Lower |
 
 ## 5.1. Note! Azure DNS Private Zones are a global resource
 
-The benefits highlighted by "regional split brain" use of Azure Private DNS Zones for Azure Private link, are **not** a recommendation to abandon/forget the Global nature  Azure DNS Private Zones as an Azure resource in their entirety. In fact, for your own services (where you are using Azure DNS Private Zones for an internal forward lookup zone) the right approach _is_ normally to use a global zone. This is because, normally, the IP address (A record) returned by DNS, represents the destination of the service you are trying to access. The reason this fundamentally differs for Azure Private Link, is  that the IP address (A record) returned by DNS represents only the location of the Private Endpoint (PE), _not_ the destination/location of the finale PaaS service to be accessed.
+Even where this article walks through "regional split brain" use of Azure Private DNS Zones for Azure Private Link, that is **not** a recommendation to abandon the global nature of Azure DNS Private Zones in general. For your own services (where you use a Private DNS Zone as an internal forward lookup zone), a single global zone is normally the right approach.
+
+The historical reason this article presented Private Link as different was that an A record for `privatelink.*` represents the location of the Private Endpoint, not the location of the final PaaS service. With per-region Private Endpoints (which is the current CAF-recommended pattern), this distinction matters far less than it did when the article was first written — DNS still resolves to a regional PE, but the consumer side gets that benefit from PE placement rather than from zone segmentation.
+
+Per Microsoft's [Azure Private DNS zone resiliency](https://learn.microsoft.com/azure/dns/private-dns-resiliency): *"Azure DNS private zones are global resources … DNS private zones are resilient to regional outages because zone data is globally available."*
+
+## 5.2. Further reading
+
+Official Microsoft sources:
+
+- CAF — [Private Link and DNS integration at scale](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/private-link-and-dns-integration-at-scale)
+- CAF — [DNS for on-premises and Azure resources](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/dns-for-on-premises-and-azure-resources)
+- Azure Architecture Center — [Private Link in a hub-and-spoke network](https://learn.microsoft.com/azure/architecture/networking/guide/private-link-hub-spoke-network)
+- [Azure Private Endpoint DNS integration scenarios](https://learn.microsoft.com/azure/private-link/private-endpoint-dns-integration)
+- [Azure Private Endpoint private DNS zone values](https://learn.microsoft.com/azure/private-link/private-endpoint-dns)
+- [Azure Private DNS zone resiliency](https://learn.microsoft.com/azure/dns/private-dns-resiliency)
+- [Azure DNS Private Resolver overview](https://learn.microsoft.com/azure/dns/dns-private-resolver-overview)
+- [Fallback to internet for Azure Private DNS zones (`resolutionPolicy=NxDomainRedirect`)](https://learn.microsoft.com/azure/dns/private-dns-fallback)
+
+ALZ / IaC modules:
+
+- AVM pattern module — [`avm/ptn/network/private-link-private-dns-zones`](https://github.com/Azure/bicep-registry-modules/tree/main/avm/ptn/network/private-link-private-dns-zones)
+- [Azure Landing Zones (Terraform)](https://github.com/Azure/terraform-azurerm-avm-ptn-alz)
+
+Microsoft Tech Community blogs:
+
+- Ashish Rana — [DNS best practices for implementation in Azure Landing Zones](https://techcommunity.microsoft.com/blog/azurenetworkingblog/dns-best-practices-for-implementation-in-azure-landing-zones/4420567) (2025-06)
+- Andrew Coughlin — [Private Endpoint DNS Resolution with Azure Private Resolver for Multi-Region](https://techcommunity.microsoft.com/blog/coreinfrastructureandsecurityblog/private-endpoint-dns-resolution-with-azure-private-resolver-for-multi-region/3679643)
+- deepthihr — [Private DNS and Hub–Spoke Networking for Enterprise AI Workloads on Azure](https://techcommunity.microsoft.com/blog/azureinfrastructureblog/private-dns-and-hub-spoke-networking-for-enterprise-ai-workloads-on-azure/4508835)
+- Stephane Eyskens — [Azure DNS Private Resolver topologies](https://techcommunity.microsoft.com/blog/azurenetworkingblog/azure-dns-private-resolver-topologies/3842634)
+
+Community / reference:
+
+- Daniel Mauser — [Private Endpoint DNS Integration Scenarios](https://github.com/dmauser/PrivateLink/tree/master/DNS-Integration-Scenarios)
 
 # 6. Appendix A - Hybrid forwarding and multi-region Private Link considerations when accessing from On-Premises
 
