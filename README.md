@@ -15,8 +15,8 @@ Multi-region use of Azure Private Link
 - [4. Architecture Option 2 – Single Global Azure DNS Private Zone (attached to all Azure Regions)](#4-architecture-option-2--single-global-azure-dns-private-zone-attached-to-all-azure-regions)
     - [4.1. Overview](#41-overview)
     - [4.2. Design considerations](#42-design-considerations)
-        - [4.2.1. Sub-Optimal use of Azure Private Link / SDN](#421-sub-optimal-use-of-azure-private-link--sdn)
-        - [4.2.2. Manual DNS intervention required for inter-region failover of some Azure PaaS services when using Private Link](#422-manual-dns-intervention-required-for-inter-region-failover-of-some-azure-paas-services-when-using-private-link)
+        - [4.2.1. Cross-region client-to-PE traffic considerations](#421-cross-region-client-to-pe-traffic-considerations)
+        - [4.2.2. Manual DNS record management for shared-FQDN geo-redundant PaaS](#422-manual-dns-record-management-for-shared-fqdn-geo-redundant-paas)
         - [4.2.3. Hybrid Private Link connectivity always optimal](#423-hybrid-private-link-connectivity-always-optimal)
 - [5. Conclusion](#5-conclusion)
     - [5.1. Note! Azure DNS Private Zones are a global resource](#51-note-azure-dns-private-zones-are-a-global-resource)
@@ -121,31 +121,37 @@ However, when integrating [conditional forward from On-Premises](https://learn.m
 
 ## 4.2. Design considerations
 
-### 4.2.1. Sub-Optimal use of Azure Private Link / SDN
+### 4.2.1. Cross-region client-to-PE traffic considerations
 
-In the diagram below, showing the DNS and datapath in a scenario that uses a common global Azure DNS Private Zone. Notice how the datapath between Azure regions relies on the customer's existing inter-region routing solution E.g. ExpressRoute transit or Global VNet Peering. 
+In the diagram below the datapath between Azure regions relies on the customer's existing inter-region routing solution (Global VNet Peering, ExpressRoute, or a Virtual WAN hub) rather than the Microsoft-managed inter-region transport that Private Link can provide.
 
-With this design, data between the source/client and the Private Endpoint will rely more heavily on the Layer-3 routing provided by the customer's overlay Virtual Networking. This will increase cost and decrease performance and reliability, due to introducing additional hops made-up of customer specific components such as VNet Peering, ExpressRoute Circuits, ExpressRoute Gateways, NVAs and Routing/Security intent (NSG/UDR).
+With this design, data between the source/client and the Private Endpoint relies more heavily on the Layer-3 routing provided by the customer's overlay Virtual Networking, which can increase cost and add hops (VNet Peering, ExpressRoute Circuits, ExpressRoute Gateways, NVAs, NSG/UDR).
 
 | ![](images/2022-03-16-11-49-55.png) | 
 |:--:| 
 | <span style="font-size:0.8em;">Figure 6 - Inter-region PaaS access with global Azure DNS Private Zone</span> |
 
-### 4.2.2. Manual DNS intervention required for inter-region failover of some Azure PaaS services when using Private Link
+> **Important caveat — this concern only applies to a specific shape.** It arises when a *single* Private Endpoint in one region is consumed by clients in another region. CAF's recommendation for any service consumed regionally is to deploy a **Private Endpoint per region** (see [Private Link and DNS integration at scale](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/private-link-and-dns-integration-at-scale)). With per-region PEs, the VM→PE leg stays intra-region in **either** zone model — what differs is how DNS steers each client to its local PE, and whether that record can be resolved during a regional outage. The single-zone model with regional PEs is the common ALZ deployment shape today.
 
-The use of a common global Azure DNS Private Zone presents a challenge when working with the failover behaviour of Azure Storage. In the below diagram, please consider the following scenario.
+### 4.2.2. Manual DNS record management for shared-FQDN geo-redundant PaaS
 
--	The red Virtual Machine is configured to access a blob storage account test.blob.core.windows.net, and under normal conditions does so via its local Private Endpoint
--	You are also utilising Azure Site Recovery (ASR) to copy the VM’s to Region B
--	In a failure event, these VMs get re-inflated as Blue VMs in region B, and continue to use the same test.blob.core.windows.net FQDN for storage access
--	Using the green global Azure DNS Private Zone, a **remote** IP address is returned from a common A record, directing traffic to the **remote** Private Endpoint.This not only results in sub-optimal traffic flow (see section 2.2.1), but also a datapath that is now broken if Region A is offline/unavailable
--	User intervention (or complicated DR run-books)are required to change the global Azure DNS zone configuration to re-point the A records at the Blue Private Endpoints in order to reestablish the datapath to Azure Storage
+The single zone model has one specific awkward case: PaaS services where **the same FQDN must resolve to different IPs in different regions** during failover. The clearest example is Azure Storage GRS — both the primary and secondary endpoints share `<account>.blob.core.windows.net`, and only one Private Endpoint can be active for that FQDN at a time. Consider the following scenario:
+
+-	The red Virtual Machine is configured to access a blob storage account `test.blob.core.windows.net`, and under normal conditions does so via its local Private Endpoint
+-	You are also utilising Azure Site Recovery (ASR) to copy the VMs to Region B
+-	In a failure event, these VMs get re-inflated as Blue VMs in region B, and continue to use the same `test.blob.core.windows.net` FQDN for storage access
+-	With a single global zone, the A record still points at the Region A Private Endpoint, which may be unavailable
+-	A DNS record update is required to re-point the A record at the Region B Private Endpoint after the storage account fails over
 
 | ![](images/2022-03-16-11-57-03.png) | 
 |:--:| 
 | <span style="font-size:0.8em;">Figure 7 - Azure Storage failover PaaS access with global Azure DNS Private Zone</span> |
 
-> Information on Azure DNS Private Zones global failover https://learn.microsoft.com/en-us/azure/dns/private-dns-resiliency
+A few important nuances:
+
+- **The Private DNS zone resource itself is global and survives a regional outage.** Per [Azure Private DNS zone resiliency](https://learn.microsoft.com/azure/dns/private-dns-resiliency): *"DNS private zones are resilient to regional outages because zone data is globally available."* The "high RTO" framing earlier versions of this article used has aged poorly — the resiliency cost is bounded to the manual record update for the specific shared-FQDN services described above, not to general name resolution.
+- **CAF acknowledges this is fundamentally the same problem in either zone model.** Per [Private Link and DNS integration at scale](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/private-link-and-dns-integration-at-scale): *"This scenario requires manual maintenance and updates of the Private Link DNS record set in every region because there's currently no automated lifecycle management for these."* Per-region zones avoid the active/standby A-record juggle by holding *both* records in *separate* zones — operationally simpler in the storage GRS case, but it does not generalise.
+- **Services with region-tokenised FQDNs are a different shape.** Azure Container Apps (`privatelink.{regionName}.azurecontainerapps.io`), AKS API server (`privatelink.{regionName}.azmk8s.io`), Azure Backup, Kusto and Azure Monitor Prometheus include `{regionName}` or `{regionCode}` placeholders in their canonical FQDN. These naturally produce one zone per region of use without any active/standby ambiguity, and the AVM module handles them explicitly.
 
 ### 4.2.3. Hybrid Private Link connectivity always optimal
 
