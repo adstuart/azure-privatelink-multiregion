@@ -16,7 +16,7 @@ Multi-region use of Azure Private Link
     - [4.1. Overview](#41-overview)
     - [4.2. Design considerations](#42-design-considerations)
         - [4.2.1. Cross-region client-to-PE traffic considerations](#421-cross-region-client-to-pe-traffic-considerations)
-        - [4.2.2. Manual DNS record management for shared-FQDN geo-redundant PaaS](#422-manual-dns-record-management-for-shared-fqdn-geo-redundant-paas)
+        - [4.2.2. Manual DNS intervention required for some Azure PaaS services](#422-manual-dns-intervention-required-for-some-azure-paas-services)
         - [4.2.3. Hybrid Private Link connectivity always optimal](#423-hybrid-private-link-connectivity-always-optimal)
 - [5. Conclusion](#5-conclusion)
     - [5.1. Note! Azure DNS Private Zones are a global resource](#51-note-azure-dns-private-zones-are-a-global-resource)
@@ -134,11 +134,14 @@ With this design, data between the source/client and the Private Endpoint relies
 |:--:| 
 | <span style="font-size:0.8em;">Figure 6 - Inter-region PaaS access with global Azure DNS Private Zone</span> |
 
-> **Important caveat — this concern only applies to a specific shape.** It arises when a *single* Private Endpoint in one region is consumed by clients in another region. CAF's recommendation for any service consumed regionally is to deploy a **Private Endpoint per region** (see [Private Link and DNS integration at scale](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/private-link-and-dns-integration-at-scale)). With per-region PEs, the VM→PE leg stays intra-region in **either** zone model — what differs is how DNS steers each client to its local PE, and whether that record can be resolved during a regional outage. The single-zone model with regional PEs is the common ALZ deployment shape today.
+> Note: deploying a Private Endpoint per region does **not** remove this characteristic on its own. A single Private DNS zone can only hold one A record per FQDN, so even where regional PEs exist, all linked VNets resolve to whichever PE registered the record — clients in the other region traverse the customer overlay to reach it. The per-region zone model is what allows the *same* FQDN to resolve to *different* PE IPs in different regions, keeping the VM→PE leg intra-region and pushing the inter-region transit onto the Microsoft-managed Private Link backbone.
 
-### 4.2.2. Manual DNS record management for shared-FQDN geo-redundant PaaS
+### 4.2.2. Manual DNS intervention required for some Azure PaaS services
 
-The single zone model has one specific awkward case: PaaS services where **the same FQDN must resolve to different IPs in different regions** during failover. The clearest example is Azure Storage GRS — both the primary and secondary endpoints share `<account>.blob.core.windows.net`, and only one Private Endpoint can be active for that FQDN at a time. Consider the following scenario:
+Failover behaviour with a single global zone splits PaaS services into two camps, governed by how each service implements its own regional resilience:
+
+- **Service-level FQDN/CNAME failover — single zone is fine.** Azure SQL (failover groups), Azure SQL Managed Instance, Azure Service Bus (Premium namespace pairing) and Azure Event Hubs all expose an abstracted cluster FQDN that is remapped to the active regional instance by the platform on failover. Resolution still lands on the original PE A record, but the underlying CNAME chain redirects to the now-active region with no DNS edit by the customer. Single global zone works seamlessly.
+- **Same-FQDN-different-IP services — manual intervention required.** Azure Storage (GRS/RA-GRS), Azure Site Recovery, Azure Key Vault, Azure Cosmos DB (where clients use the global account FQDN before SDK-side endpoint discovery), Azure Container Registry geo-replication, Power BI, and Azure Static Web Apps. The example below uses Storage:
 
 -	The red Virtual Machine is configured to access a blob storage account `test.blob.core.windows.net`, and under normal conditions does so via its local Private Endpoint
 -	You are also utilising Azure Site Recovery (ASR) to copy the VMs to Region B
@@ -152,9 +155,9 @@ The single zone model has one specific awkward case: PaaS services where **the s
 
 A few important nuances:
 
-- **The Private DNS zone resource itself is global and survives a regional outage.** Per [Azure Private DNS zone resiliency](https://learn.microsoft.com/azure/dns/private-dns-resiliency): *"DNS private zones are resilient to regional outages because zone data is globally available."* The "high RTO" framing earlier versions of this article used has aged poorly — the resiliency cost is bounded to the manual record update for the specific shared-FQDN services described above, not to general name resolution.
-- **CAF acknowledges this is fundamentally the same problem in either zone model.** Per [Private Link and DNS integration at scale](https://learn.microsoft.com/azure/cloud-adoption-framework/ready/azure-best-practices/private-link-and-dns-integration-at-scale): *"This scenario requires manual maintenance and updates of the Private Link DNS record set in every region because there's currently no automated lifecycle management for these."* Per-region zones avoid the active/standby A-record juggle by holding *both* records in *separate* zones — operationally simpler in the storage GRS case, but it does not generalise.
-- **Services with region-tokenised FQDNs are a different shape.** Azure Container Apps (`privatelink.{regionName}.azurecontainerapps.io`), AKS API server (`privatelink.{regionName}.azmk8s.io`), Azure Backup, Kusto and Azure Monitor Prometheus include `{regionName}` or `{regionCode}` placeholders in their canonical FQDN. These naturally produce one zone per region of use without any active/standby ambiguity, and the AVM module handles them explicitly.
+- **A per-service breakdown is maintained separately.** See the companion [`adstuart/azure-privatelink-multiregion-services`](https://github.com/adstuart/azure-privatelink-multiregion-services) repo for the categorisation above kept up to date as Azure adds services.
+- **The Private DNS zone resource itself is global and survives a regional outage.** Per [Azure Private DNS zone resiliency](https://learn.microsoft.com/azure/dns/private-dns-resiliency): *"DNS private zones are resilient to regional outages because zone data is globally available."* The "high RTO" framing earlier versions of this article used has aged poorly — the resiliency cost is bounded to record management for the second category above, not to general name resolution.
+- **Services with region-tokenised FQDNs are a different shape entirely.** Azure Container Apps (`privatelink.{regionName}.azurecontainerapps.io`), AKS API server (`privatelink.{regionName}.azmk8s.io`), Azure Backup, Kusto and Azure Monitor Prometheus include `{regionName}` or `{regionCode}` placeholders in their canonical FQDN. These naturally produce one zone per region of use without any active/standby ambiguity, and the AVM module handles them explicitly.
 
 ### 4.2.3. Hybrid Private Link connectivity always optimal
 
@@ -170,7 +173,7 @@ Both designs are viable and functional, but they have different characteristics 
 
 **Per-region or per-spoke zones remain appropriate when:**
 
-- **Shared-FQDN geo-redundant PaaS** is in use (Azure Storage GRS/RA-GRS, SQL failover groups, Cosmos DB multi-region writes). The same FQDN must resolve to a different IP after failover; per-region zones avoid the active/standby A-record juggle. (See §4.2.2.)
+- **PaaS without service-level FQDN failover** is in use (Azure Storage GRS/RA-GRS, ASR, Key Vault, Cosmos DB, ACR geo-replication, Power BI, Static Web Apps). The same FQDN must resolve to a different IP after failover; per-region zones avoid the active/standby A-record juggle. (See §4.2.2 and the companion [`azure-privatelink-multiregion-services`](https://github.com/adstuart/azure-privatelink-multiregion-services) repo for the full per-service categorisation.)
 - **Strict tenant or sovereignty isolation** mandates segmentation by region or workload subscription. CAF actively discourages this with its `Deny-PrivateDNSZone-PrivateLink` policy by default — but the policy is a default, not a law.
 - **Cross-tenant Private Link** consumption, where the consumer cannot link to the producer's zone. Private DNS [`resolutionPolicy=NxDomainRedirect`](https://learn.microsoft.com/azure/dns/private-dns-fallback) may be the right tool here rather than zone duplication.
 - **BIND/Infoblox-based hybrid DNS environments** — see Appendix A. In some topologies the single global zone is materially simpler regardless of the points above.
@@ -179,9 +182,10 @@ Both designs are viable and functional, but they have different characteristics 
 
   | Criterion | Option 1 — Per-region zones | Option 2 — Single global zone |
   | --- | --- | --- |
-  | Optimal Private Link SDN traffic flows | Yes (with per-region PEs) | Yes with per-region PEs; sub-optimal only when a single PE in one region serves multi-region clients |
+  | Optimal Private Link SDN traffic flows | Yes — different A records returned per region keep VM→PE intra-region | Sub-optimal for cross-region clients — only one A record per FQDN, so non-local clients traverse the customer overlay to reach the registered PE |
   | Inter-region resilience of name resolution itself | Yes — independent regional zones | Yes — Private DNS zones are global resources whose data plane is regionally replicated ([resiliency doc](https://learn.microsoft.com/azure/dns/private-dns-resiliency)) |
-  | Seamless failover for shared-FQDN geo-redundant PaaS (storage GRS, SQL failover groups) | Yes (each region has its own A record) | Conditional — manual record update required |
+  | Seamless failover for services with service-level FQDN/CNAME failover (SQL, SQL MI, Service Bus, Event Hubs) | Yes | Yes — handled by the platform |
+  | Seamless failover for services without service-level FQDN failover (Storage, ASR, Key Vault, Cosmos DB, ACR, Power BI, Static Web Apps) | Yes (each region has its own A record) | Manual DNS record update required |
   | Optimal hybrid forwarding (BIND/Infoblox) | Maybe (see Appendix A) | Yes |
   | Operational consistency / drift risk | Higher — N copies to keep aligned | Lower — single source of truth |
   | Alignment with current CAF / ALZ / AVM guidance | Conditional (per-region scenarios above) | Default baseline |
